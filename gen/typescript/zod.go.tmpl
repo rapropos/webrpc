@@ -1,0 +1,299 @@
+{{ define "zod"}}
+
+{{- $types := .Types }}
+{{- $typeMap := .TypeMap }}
+{{- $services := .Services }}
+
+{{- $coreZxprMap := dict
+    "string" "z.string()"
+    "bool" "z.boolean()"
+    "int" "z.number()"
+    "int16" "z.number()"
+    "int32" "z.number()"
+    "int64" "z.number()"
+    "uint" "z.number()"
+    "uint16" "z.number()"
+    "uint32" "z.number()"
+    "uint64" "z.number()"
+    "float32" "z.number()"
+    "float64" "z.number()"
+    "timestamp" "z.string()"
+    "any" "z.any()"
+}}
+
+{{/* we need to get members defined before anything that uses them */}}
+{{- $todoTypes := dict }}
+{{- range $_, $t := $types }}
+    {{ $_ := set $todoTypes $t.Name $t }}
+{{- end }}
+
+{{- $watchedTypes := dict }}
+
+{{- range $_, $svc := $services }}
+    {{- range $_, $meth := $svc.Methods }}
+		{{- if hasPrefix $meth.Name "Watch" }}
+		    {{ $rt := (index $meth.Outputs 0).Type }}
+			{{- if isListType $rt }}
+				{{ $rt = $rt.List.Elem }}
+			{{- end }}
+			{{ set $watchedTypes $rt.Expr $rt }}
+		{{- end}}
+	{{- end }}
+{{- end }}
+
+import {z} from "zod/v4";
+
+type Transition<T> = {
+	prev: T;
+	next: T;
+}
+
+interface Ided {
+	id: string;
+}
+
+function applyPatch<T extends Ided>(prev: T, trans: Transition<Partial<T>>): Partial<T> {
+	const next = structuredClone(prev) as Record<string, any>;
+	for (const k in trans.prev) {
+		if (k !== "id") {
+			// eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+			delete (next[k]);
+		}
+	}
+	for (const k in trans.next) {
+		if (k !== "id") {
+			next[k] = trans.next[k];
+		}
+	}
+	const rv = next as T;
+	return rv;
+}
+
+function isNukePacket(wpkt: WiredSetlistPacket) {
+	return (!("prev" in wpkt) || !wpkt.prev) && (!("next" in wpkt) || !wpkt.next);
+}
+
+const Ided = z.object({id: z.string()});
+
+{{- if $types }}
+    {{- range $_, $type := $types }}
+		{{- if hasKey $todoTypes $type.Name }}
+			{{- if isEnumType $type }}
+				{{- template "zodEnum" dict "Name" $type.Name "Fields" $type.Fields "TodoTypes" $todoTypes }}
+			{{- else if isStructType $type }}
+				{{- template "zodStruct" dict
+					"Name" $type.Name "Fields" $type.Fields "TypeMap" $coreZxprMap
+					"TodoTypes" $todoTypes "WatchedTypes" $watchedTypes }}
+			{{- else }}
+				// problem {{$type}} neither struct nor enum
+			{{- end }}
+		{{- end }}
+    {{- end }}
+
+export const RpcTypeMap = {
+    {{- range $_, $type := $types }}
+        {{$type.Name}}: {
+			name: "{{$type.Name}}",
+			schema: {{$type.Name}},
+			deltaTransitionSchema: {{ if hasKey $watchedTypes $type.Name }}{{$type.Name}}DeltaTransition{{else}}undefined{{end}},
+        },
+    {{- end }}
+} as const;
+export type RpcType = keyof typeof RpcTypeMap;
+{{- end }}
+
+{{- if $services }}
+    {{- range $_, $svc := $services }}
+	    {{- range $_, $meth := $svc.Methods }}
+			// method {{$meth}}
+			{{- if gt (len $meth.Inputs) 0 }}
+				{{- template "zodStruct" dict
+					"Name" (print $meth.Name "Request") "Fields" $meth.Inputs "TypeMap" $coreZxprMap
+					"TodoTypes" $todoTypes "WatchedTypes" $watchedTypes }}
+			{{- end}}
+			{{- if gt (len $meth.Outputs) 0 }}
+				{{- template "zodStruct" dict
+					"Name" (print $meth.Name "Response") "Fields" $meth.Outputs "TypeMap" $coreZxprMap
+					"TodoTypes" $todoTypes "WatchedTypes" $watchedTypes }}
+			{{- end}}
+		{{- end }}
+	{{- end }}
+
+export const RpcVerbMap = {
+	{{- range $_, $svc := $services }}
+		{{- range $_, $method := $svc.Methods }}
+			{{- $isWatcher := false }}
+			{{- $verb := $method.Name }}
+			{{- if hasPrefix $verb "Watch" }}
+				{{ $isWatcher = true }}
+				{{ $verb = trimPrefix $verb "Watch" }}
+			{{- end }}
+			{{- $responseSingleton := "DEADBEEF" }}
+			{{- $responsePayloadType := "DEADBEEF" }}
+			{{- $responseEnvelope := "DEADBEEF" }}
+			{{- $responseElemTypeName := "DEADBEEF" }}
+			{{- $setlistPayloadType := "DEADBEEF" }}
+			{{- $multiplicity := "" }}
+			{{- $responseSchema := "z.never()" }}
+			{{- $hasOutput := gt (len $method.Outputs) 0 }}
+			{{- if $hasOutput }}
+				{{- $responseSingleton = index $method.Outputs 0 }}
+				{{- $responsePayloadType = $responseSingleton.Type }}
+				{{- $responseEnvelope = $responseSingleton.Name }}
+				{{- $responseElemTypeName = trimPrefix $responseSingleton.Type.Expr "[]" }}
+				{{- if hasKey $typeMap $responseElemTypeName }}
+					{{ $responseElemTypeName = get $typeMap $responseElemTypeName }}
+				{{- end }}
+				{{- if isListType $responsePayloadType }}
+					{{- $setlistPayloadType = $responsePayloadType.List.Elem }}
+				{{- else }}
+					{{- $setlistPayloadType = $responsePayloadType }}
+				{{- end }}
+				{{- $multiplicity = ternary (eq $responseElemTypeName $responseSingleton.Type.Expr) "single" "multi" }}
+				{{- $responseSchema = print $method.Name "Response" }}
+			{{- end }}
+			{{- $hasInput := gt (len $method.Inputs) 0 }}
+
+		{{$verb}}: {
+			{{- if $hasInput}}
+			hasInput: true,
+			requestSchema: {{$method.Name}}Request,
+			tqkSchema: z.tuple([z.literal("{{$verb}}"), {{$method.Name}}Request]),
+			optionalArgTqkSchema: z.tuple([z.literal("{{$verb}}"), z.optional({{$method.Name}}Request)]),
+			{{- else }}
+			hasInput: false,
+			requestSchema: z.undefined(),
+			tqkSchema: z.tuple([z.literal("{{$verb}}")]),
+			{{end}}
+
+			returnEnvelope: "{{$responseEnvelope}}",
+			responseSchema: {{$responseSchema}},
+
+			{{- if and $hasOutput (not $method.StreamOutput) }}
+			unwrapResponse: (rpc: {{$method.Name}}Response) => rpc.{{$responseEnvelope}},
+//			returnLetterSchema: {{template "zodType" dict "Type" $responseSingleton.Type "TypeMap" $coreZxprMap }},
+//			returnLetterTypeName: "{{$responseElemTypeName}}",
+			{{- else }}
+			unwrapResponse: () => undefined,
+//			returnLetterSchema: z.never(),
+//			returnLetterTypeName: undefined,
+			{{- end }}
+		},
+		{{- end }}
+	{{- end }}
+} as const;
+export type RpcVerb = keyof typeof RpcVerbMap;
+export type RequestSchemaFor<Verb extends RpcVerb> = typeof RpcVerbMap[Verb] extends { requestSchema: unknown }
+	? typeof RpcVerbMap[Verb]["requestSchema"] : never;
+export type ResponseSchemaFor<Verb extends RpcVerb> = typeof RpcVerbMap[Verb] extends { responseSchema: unknown }
+	? typeof RpcVerbMap[Verb]["responseSchema"] : never;
+export type TqKey<Verb extends RpcVerb> = z.infer<typeof RpcVerbMap[Verb]["tqkSchema"]>;
+
+export const setlistPacketConsumersByVerb = {
+	{{- range $_, $svc := $services }}
+		{{- range $_, $method := $svc.Methods }}
+			{{- if and (gt (len $method.Outputs) 0) (hasPrefix $method.Name "Watch") }}
+				{{- $cacheEntryTypeName := print $method.Name "Response"	}}
+				{{- $verb := trimPrefix $method.Name "Watch" }}
+				{{- $responseSingleton := index $method.Outputs 0 }}
+				{{- $responsePayloadType := $responseSingleton.Type }}
+				{{- $responseEnvelope := $responseSingleton.Name }}
+				{{- $responseElemTypeName := trimPrefix $responseSingleton.Type.Expr "[]" }}
+				{{- if hasKey $typeMap $responseElemTypeName }}
+					{{ $responseElemTypeName = get $typeMap $responseElemTypeName }}
+				{{- end }}
+				{{- $setlistPayloadType := "DEADBEEF" }}
+				{{- $multiplicity := "" }}
+				{{- if isListType $responsePayloadType }}
+					{{- $setlistPayloadType = $responsePayloadType.List.Elem }}
+					{{- $multiplicity = "multi" }}
+				{{- else }}
+					{{- $setlistPayloadType = $responsePayloadType }}
+					{{- $multiplicity = "single" }}
+				{{- end }}
+				{{- $setlistPayloadSchema := print $responseElemTypeName }}
+				{{- $responseSchema := print $method.Name "Response" }}
+				{{- $hasInput := gt (len $method.Inputs) 0 }}
+	{{$verb}}: (tqc: QueryClient, rawTqk: QueryKey, rawPacket: WiredSetlistPacket) => {
+		const vrec = RpcVerbMap["{{$verb}}"];
+		const tqk = vrec.tqkSchema.parse(rawTqk, {reportInput: true});
+		type CacheEntryT = {{$cacheEntryTypeName}};
+		const deltaSchema = RpcTypeMap["{{$responseElemTypeName}}"].deltaTransitionSchema;
+		const deltaZprv = deltaSchema.safeParse(rawPacket);
+		const cacheEntry = tqc.getQueryData<CacheEntryT>(tqk);
+		const cachePayload = cacheEntry ? cacheEntry.{{$responseEnvelope}} : undefined;
+		const seal = (letter: unknown) => vrec.responseSchema.parse({ {{- $responseEnvelope -}}: letter}, {reportInput: true});
+
+				{{- if eq $multiplicity "single" }}
+		const patchedNext = !!cachePayload && deltaZprv.success
+			? {{$setlistPayloadSchema}}.parse(applyPatch(cachePayload, deltaZprv.data), {reportInput: true})
+			: undefined;
+
+		if (!("next" in rawPacket) || !rawPacket.next
+			|| (deltaZprv.success && !patchedNext)) {
+			void tqc.invalidateQueries({queryKey: tqk});
+			return
+		}
+		// at this point, three possible things can be happening:
+		// - an addition
+		// - a full replace
+		// - a delta that has been inflated
+		const next = patchedNext ?? {{$setlistPayloadSchema}}.parse(rawPacket.next, {reportInput: true});
+		const sealedNext = seal(next);
+		tqc.setQueryData<CacheEntryT>(tqk, sealedNext);
+				{{- else }}{{/* is a list */}}
+		if (isNukePacket(rawPacket)) {
+			void tqc.invalidateQueries({queryKey: tqk});
+		}
+
+		if ("prev" in rawPacket && rawPacket.prev && !("next" in rawPacket)) {
+			// a delete
+			const prevId = Ided.parse(rawPacket.prev).id;
+			if (cachePayload) {
+				const next = cachePayload.filter(maybe => maybe.id !== prevId);
+				const sealedNext = seal(next);
+				tqc.setQueryData<CacheEntryT>(tqk, sealedNext);
+			}
+		} else {
+			// at this point, next must exist and we have the same three-pronged situation.
+			// we need set behavior, so we don't blindly add things that we are told to add.
+			// so basically we are updating our entry with the relevant id or adding a new
+			// one if we don't find one.
+
+			const wantedId = Ided.parse(rawPacket.next, {reportInput: true}).id;
+			let found = false;
+			const next: {{$responseElemTypeName}}[] = [];
+			for (const elem of (cachePayload ?? [])) {
+				if (elem.id === wantedId) {
+					const newElem = {{$setlistPayloadSchema}}.parse(
+                    (deltaZprv.success ? applyPatch(elem, deltaZprv.data) : rawPacket.next),
+					   {reportInput: true});
+					next.push(newElem);
+					found = true;
+				} else {
+					next.push(elem);
+				}
+			}
+
+			if (!found) {
+				if (deltaZprv.success) {
+					// no bueno, we have nothing to patch from
+					void tqc.invalidateQueries({queryKey: tqk});
+				}
+				const newElem = {{$setlistPayloadSchema}}.parse(rawPacket.next, {reportInput: true});
+				next.push(newElem);
+			}
+
+			const sealedNext = seal(next);
+			tqc.setQueryData<CacheEntryT>(tqk, sealedNext);
+		}
+				{{- end }}
+	},
+			{{- end }}
+		{{- end }}
+	{{- end }}
+} as const;
+
+{{- end }}
+
+{{- end }}

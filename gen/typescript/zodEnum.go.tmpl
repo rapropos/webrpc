@@ -1,0 +1,15 @@
+{{ define "zodEnum" }}
+
+{{ $name := .Name }}
+{{ $fields := .Fields }}
+{{ $todoTypes := .TodoTypes }}
+
+export const {{$name}} = z.enum([
+    {{- range $i, $field := $fields}}
+    "{{$field.Name}}",
+    {{- end}}
+]);
+export type {{$name}} = z.infer<typeof {{$name}}>;
+
+{{ $_ := unset $todoTypes $name }}
+{{- end }}

@@ -1,0 +1,50 @@
+{{ define "tqfn" }}
+
+{{- $method := .Method }}
+{{- $methodMap := .MethodMap }}
+{{- $argsVarName := .argsVarName }}
+{{- if not $argsVarName }}
+{{      $argsVarName = "args" }}
+{{- end}}
+
+{{- $tsmn := firstLetterToLower $method.Name }}
+
+{{- $baseName := trimPrefix $method.Name "Watch" }}
+{{- $tsbn := firstLetterToLower $baseName }}
+
+{{- $hasInput := gt (len $method.Inputs) 0}}
+
+{{- $out := false }}
+{{- $outTypeName := false }}
+{{- $isOutSlice := false }}
+{{- $isOutStub := false }}
+{{- $isOutUncertain := false }}
+{{- $outTypeBaseName := false }}
+{{- $ribFetchFieldName := false }}
+{{- $automaticLastValidFallback := false }}
+
+{{- $hasOutput := gt (len $method.Outputs) 0}}
+{{- if $hasOutput }}
+{{-     $out = index $method.Outputs 0}}
+{{-     $outTypeName = $out.Type.Expr }}
+{{-     $isOutSlice = hasPrefix $outTypeName "[]"}}
+{{-     $isOutStub = hasSuffix $outTypeName "Stub"}}
+{{-     $isOutUncertain = $out.Optional }}
+{{-     $outTypeBaseName = trimSuffix (trimPrefix $outTypeName "[]") "Stub" }}
+{{-     $ribFetchFieldName = firstLetterToLower $outTypeBaseName }}
+{{- end }}
+
+{{- $lastValidBackupMn := print "LastValid" $baseName }}
+{{- $lastValidBackupExists := hasKey $methodMap $lastValidBackupMn}}
+{{- $byIdEnsurerFnm := print "ensure" $outTypeBaseName "ById"}}
+{{- $byIdFetcherFnm := print "watch" $outTypeBaseName "ById" -}}
+mama.{{$tsmn}}({{if $hasInput}}{{$argsVarName}}{{end}})
+{{- if eq (len $method.Outputs) 1}}
+    {{- if all $automaticLastValidFallback $isOutUncertain $lastValidBackupExists }}
+    .then(rpc => {
+        return rpc.{{$ribFetchFieldName}}
+            ?? mama.{{firstLetterToLower $lastValidBackupMn}}({{$argsVarName}});
+	})
+    {{- end}}
+{{- end }}
+{{- end }}

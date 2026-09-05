@@ -69,6 +69,11 @@ import (
 {{- /* Print custom type imports. */ -}}
 {{- $imports := dict -}}
 
+{{- if $opts.tq }}
+	{{- set $imports "github.com/jackc/pgx/v5" "" }}
+	{{- set $imports "github.com/jackc/pgx/v5/pgtype" "" }}
+{{- end -}}
+
 {{- if eq $opts.json "stdlib" -}}
 	{{- /* Already imported in the stdlib section. */ -}}
 {{- else if eq $opts.json "jsoniter" -}}

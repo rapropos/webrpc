@@ -1,0 +1,127 @@
+{{- define "tq"}}
+{{- $services := .Services -}}
+{{- $typeMap := .TypeMap -}}
+{{- $typePrefix := .TypePrefix -}}
+
+{{- if $services -}}
+{{- range $_, $service := $services}}
+
+{{- $watchVerbs := dict }}
+{{- range $_, $method := $service.Methods }}
+{{- if hasPrefix $method.Name "Watch"}}
+{{- set $watchVerbs (trimPrefix $method.Name "Watch") true}}
+{{- end }}
+{{- end }}
+
+{{- $tqkDone := dict }}
+
+// TQK
+
+func IsNoRows(err error) bool {
+return errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows)
+}
+
+{{- range $_, $method := $service.Methods}}
+{{- if hasPrefix $method.Name "Ignore"}}{{else}}
+{{- $baseName := ternary (hasPrefix $method.Name "Watch") (trimPrefix $method.Name "Watch")
+(ternary (hasPrefix $method.Name "Peek") (trimPrefix $method.Name "Peek") $method.Name)}}
+{{- if eq $baseName $method.Name}}{{else}}
+{{- if hasKey $watchVerbs $baseName}}
+{{- if hasKey $tqkDone $baseName}}{{else}}
+
+const {{$baseName}}Verb = "{{$baseName}}"
+
+{{- if len $method.Inputs }}
+type {{$baseName}}Args struct {
+{{- range $i, $input := $method.Inputs }}
+{{template "field" dict
+"Name" $input.Name
+"PrintName" true
+"Type" $input.Type
+"Optional" $input.Optional
+"TypeMap" $typeMap
+"TypePrefix" $typePrefix
+"TypeMeta" $input.Meta
+"JsonTags" true
+}}
+{{ end }}
+}
+
+func {{$baseName}}Tqk({{- range $i, $input := $method.Inputs}} {{$input.Name }} {{template "field" dict
+        "Name" $input.Name
+        "Type" $input.Type
+        "Optional" $input.Optional
+        "TypeMap" $typeMap
+        "TypePrefix" $typePrefix
+        "TypeMeta" $input.Meta}}, {{end}}) TanstackQueryKey {
+args := {{$baseName}}Args{
+{{- range $i, $input := $method.Inputs}}
+{{$input.Name | firstLetterToUpper}}: {{$input.Name}},
+{{- end }}
+}
+
+rv := NewTanstackQueryKey({{$baseName}}Verb, args)
+return rv
+}
+
+var {{$baseName}}WildcardTqk = TanstackQueryKey{Verb: {{$baseName}}Verb}
+{{- else }}
+func {{$baseName}}Tqk() TanstackQueryKey {
+return TanstackQueryKey{Verb: {{$baseName}}Verb}
+}
+{{- end }}
+{{ set $tqkDone $baseName true }}
+{{- end }}
+
+{{- if hasPrefix $method.Name "Watch"}}
+func (s *{{$service.Name | firstLetterToLower}}) Watch{{$baseName}}(ctx context.Context,
+{{- range $i, $input := $method.Inputs}}
+{{- $input.Name}} {{template "field" dict
+"Name" $input.Name
+"Type" $input.Type
+"Optional" $input.Optional
+"TypeMap" $typeMap
+"TypePrefix" $typePrefix
+"TypeMeta" $input.Meta}}, {{end}}) (
+{{- range $oix, $output := $method.Outputs}}
+{{- template "field" dict
+"Name" $output.Name
+"Type" $output.Type
+"Optional" $output.Optional
+"TypeMap" $typeMap
+"TypePrefix" $typePrefix
+"TypeMeta" $output.Meta}}, {{end}} error) {
+{{- $output := index $method.Outputs 0}}
+var rv {{template "field" dict
+    "Name" $output.Name
+    "Type" $output.Type
+    "Optional" $output.Optional
+    "TypeMap" $typeMap
+    "TypePrefix" $typePrefix
+    "TypeMeta" $output.Meta}}
+var err error
+rv, err = s.Peek{{$baseName}}(ctx, {{- range $i, $input := $method.Inputs}}{{$input.Name}}, {{end}})
+if IsNoRows(err) {
+err = nil
+}
+if err != nil {
+return rv, err
+}
+
+exchange := {{$baseName}}Tqk(
+{{- range $i, $input := $method.Inputs}}{{- $input.Name }}, {{end}}).String()
+err = s.SubscribeMe(ctx, exchange)
+if err != nil {
+s.Logger.Error().Err(err).Str("exchange", string(exchange)).Msg("subscribing")
+}
+
+return rv, err
+}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{ end }}

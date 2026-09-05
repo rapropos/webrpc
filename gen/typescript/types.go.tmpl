@@ -3,6 +3,7 @@
 {{- $typeMap := .TypeMap -}}
 {{- $types := .Types -}}
 {{- $services := .Services -}}
+{{- $enums := .enums -}}
 {{- $opts := .Opts -}}
 
 //
@@ -11,7 +12,7 @@
 {{if $types -}}
 {{range $_i, $type := $types -}}
 
-{{if isEnumType $type }}
+{{if and $enums (isEnumType $type) }}
 {{- if eq $opts.enumStyle "union"}}
 export const {{$type.Name}} = {
 {{- range $i, $field := $type.Fields}}

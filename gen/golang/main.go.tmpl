@@ -12,6 +12,7 @@
 {{- set $opts "errorStackTrace" (ternary (in .Opts.errorStackTrace "" "true") true false) -}}
 {{- set $opts "webrpcHeader" (ternary (eq (default .Opts.webrpcHeader "true") "false") false true) -}}
 {{- set $opts "schemaHash" (ternary (eq (default .Opts.schemaHash "true") "false") false true) -}}
+{{- set $opts "tq" (ternary (in .Opts.tq "" "true") true false) -}}
 
 {{- /* Print help on -help. */ -}}
 {{- if exists .Opts "help" -}}
@@ -200,5 +201,13 @@ func WebRPCSchemaHash() string {
 {{ template "webrpcHeader" dict "Opts" $opts "WebrpcHeader" .WebrpcHeader }}
 {{ template "jsonEncoders" dict "Opts" $opts }}
 {{ end }}
+
+{{ if $opts.tq }}
+{{ template "tq" dict
+    "Services" .Services
+    "TypeMap" $typeMap
+    "TypePrefix" $typePrefix
+}}
+{{ end -}}
 
 {{- end }}

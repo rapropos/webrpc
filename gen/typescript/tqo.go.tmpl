@@ -1,0 +1,301 @@
+{{define "tqo"}}
+// TQOTOP
+{{- $method := .Method }}
+{{- $methodMap := .MethodMap }}
+{{- $serviceName := .serviceName}}
+{{- $infallible := .infallible }}
+
+{{- $tsmn := firstLetterToLower $method.Name }}
+{{- $baseName := trimPrefix $method.Name "Watch" }}
+{{- $tsbn := firstLetterToLower $baseName }}
+
+{{- $hasInput := gt (len $method.Inputs) 0}}
+
+{{- $out := false }}
+{{- $outTypeName := false }}
+{{- $isOutSlice := false }}
+{{- $isOutStub := false }}
+{{- $isOutUncertain := false }}
+{{- $outTypeBaseName := false }}
+{{- $ribFetchFieldName := false }}
+{{- $lastValidBackupMn := false }}
+{{- $lastValidBackupExists := false }}
+{{- $byIdWatcherMn := false }}
+{{- $hasByIdWatcher := false }}
+{{- $byIdWatcherMethod := false }}
+{{- $byIdWatcherEnvelope := false }}
+
+{{- $hasOutput := gt (len $method.Outputs) 0}}
+{{- if $hasOutput }}
+{{-     $out = index $method.Outputs 0}}
+{{-     $outTypeName = $out.Type.Expr }}
+{{-     $isOutSlice = hasPrefix $outTypeName "[]"}}
+{{-     $isOutStub = hasSuffix $outTypeName "Stub"}}
+{{-     $isOutUncertain = $out.Optional }}
+{{-     $outTypeBaseName = trimSuffix (trimPrefix $outTypeName "[]") "Stub" }}
+{{-     $ribFetchFieldName = firstLetterToLower $outTypeBaseName }}
+{{-     $lastValidBackupMn = print "LastValid" $baseName }}
+{{-     $lastValidBackupExists = hasKey $methodMap $lastValidBackupMn }}
+{{-     $byIdWatcherMn = print "Watch" $outTypeBaseName "ById" }}
+{{-     $hasByIdWatcher = hasKey $methodMap $byIdWatcherMn }}
+        {{- if $hasByIdWatcher }}
+        {{- $byIdWatcherMethod = get $methodMap $byIdWatcherMn }}
+            {{- if $byIdWatcherMethod }}
+                {{- if gt (len $byIdWatcherMethod.Outputs) 0 }}
+                    {{- $byIdWatcherEnvelope = (index $byIdWatcherMethod.Outputs 0).Name }}
+                {{- end }}
+            {{- end }}
+        {{- end }}
+{{- end }}
+
+{{- if $isOutStub }}
+// {{$outTypeName}} is a stub
+{{-     if not $hasByIdWatcher }}
+// WARNING: byIdWatcher {{$byIdWatcherMn}} for {{$baseName}} does not exist
+{{-     else}}
+{{-         if $isOutSlice }}
+// {{$outTypeName}} is a slice
+{{-             if $hasInput }}
+// {{$baseName}} can take arguments
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}, args?: {{$baseName}}Request) {
+    return queryOptions({
+        queryKey: {{$tsbn}}Tqk(args),
+        queryFn: args
+            ? () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }}
+            : skipToken,
+        {{if $infallible}}throwOnError: true,{{end}}
+		select: (data: {{$method.Name}}Response) => data.{{$out.Name}},
+    });
+}
+
+export function use{{$baseName}}(args?: {{$baseName}}Request) {
+    const mama = use{{$serviceName}}Mothership();
+	return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo(mama, args));
+}
+
+                    {{- if $hasByIdWatcher }}
+export function useFull{{$baseName}}(args?: {{$baseName}}Request) {
+    const mama = use{{$serviceName}}Mothership();
+    const stubsTqrv = use{{$baseName}}(args);
+//    let dataUpdatedAt = stubsTqrv.dataUpdatedAt;
+
+	const qos = (stubsTqrv.data ?? []).map(stub => {
+        const ribRequest = {
+            {{- $ribFetchFieldName}}Id: stub.id} as const;
+        return {
+            queryKey: {{$ribFetchFieldName}}ByIdTqk(ribRequest),
+            queryFn: () => {{template "tqfn" dict "Method" $byIdWatcherMethod "MethodMap" $methodMap "argsVarName" "ribRequest"}},
+            select: (data: {{$byIdWatcherMethod.Name}}Response) => data.{{$byIdWatcherEnvelope}},
+} as const;
+    });
+
+    const refreshManager = useRefreshSet();
+    const qks = qos.map(qo => qo.queryKey);
+    const [watchingQks, setWatchingQks] = useState<QueryKey[]>([]);
+    useEffect(() => {
+        if (!isDeepEqual(qks, watchingQks)) {
+            watchingQks.forEach(qk => {
+                refreshManager.unregister(qk)
+            });
+            qks.forEach(qk => {
+                refreshManager.register(qk);
+            });
+            setWatchingQks(qks);
+        }
+    }, [qks, refreshManager, watchingQks]);
+
+	/* having combine be constant even if the spine query has not settled yet
+	 * seemed to be causing problems whereby success with empty arrays was
+	 * getting through
+	 */
+    const uqsrv = useQueries(args && stubsTqrv.isSuccess
+	? {
+		queries: qos,
+		combine: mergeUseQueriesWithInfill,
+	} : {queries: NADA});
+
+	if (!args || stubsTqrv.isPending) {
+	    return pendingUseResult;
+    }
+
+	return uqsrv;
+
+    // if (!!combine && isAfter(uqsrv.dataUpdatedAt, dataUpdatedAt)) {
+    //    dataUpdatedAt = uqsrv.dataUpdatedAt;
+    // }
+
+    // return {...uqsrv, dataUpdatedAt};
+}
+                    {{- end }}{{/* no ribfetcher */}}
+{{-             else }}{{/* no input */}}
+// {{$baseName}} takes no args
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}) {
+    return queryOptions({
+        queryKey: {{$tsbn}}Tqk,
+        queryFn: () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }},
+        {{if $infallible}}throwOnError: true,{{end}}
+        select: (data: {{$method.Name}}Response) => data.{{$out.Name}},
+});
+}
+
+export function use{{$baseName}}() {
+    const mama = use{{$serviceName}}Mothership();
+	return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo(mama));
+}
+
+export function useFull{{$baseName}}() {
+    const mama = use{{$serviceName}}Mothership();
+	const stubsTqrv = use{{$baseName}}();
+	// let dataUpdatedAt = stubsTqrv.dataUpdatedAt;
+
+	const qos = (stubsTqrv.data ?? []).map(stub => {
+        const ribRequest = {
+            {{- $ribFetchFieldName}}Id: stub.id} as const;
+        return {
+            queryKey: {{$ribFetchFieldName}}ByIdTqk(ribRequest),
+            queryFn: () => {{template "tqfn" dict "Method" $byIdWatcherMethod "MethodMap" $methodMap "argsVarName" "ribRequest"}},
+            select: (data: {{$byIdWatcherMethod.Name}}Response) => data.{{$byIdWatcherEnvelope}},
+        } as const;
+    });
+
+    const refreshManager = useRefreshSet();
+    const qks = qos.map(qo => qo.queryKey);
+    const [watchingQks, setWatchingQks] = useState<QueryKey[]>([]);
+    useEffect(() => {
+        if (!isDeepEqual(qks, watchingQks)) {
+            watchingQks.forEach(qk => {
+                refreshManager.unregister(qk)
+            });
+            qks.forEach(qk => {
+                refreshManager.register(qk);
+            });
+            setWatchingQks(qks);
+        }
+    }, [qks, refreshManager, watchingQks]);
+
+    /* having combine be constant even if the spine query has not settled yet
+     * seemed to be causing problems whereby success with empty arrays was
+     * getting through
+     */
+     const uqsrv = useQueries(stubsTqrv.isSuccess
+	 ? {
+		 queries: qos,
+		 combine: mergeUseQueriesWithInfill,
+	 } : {queries: NADA});
+
+
+    if (stubsTqrv.isPending) {
+        return pendingUseResult;
+    }
+
+    // return {...uqsrv, dataUpdatedAt};
+	 return uqsrv;
+}
+{{-             end }}
+{{-         else }}{{/* not a slice */}}
+// {{$outTypeName}} not a slice
+{{-             if $hasInput}}
+// {{$baseName}} can take args
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}, args ?: {{$baseName}}Request) {
+    return queryOptions({
+        queryKey: {{$tsbn}}Tqk(args),
+        queryFn: args
+            ? () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }}
+        : skipToken,
+        {{if $infallible}}throwOnError: true,{{end}}
+        select: (data: {{$method.Name}}Response) => data.{{$out.Name}},
+    });
+}
+
+export function use{{$baseName}}(args ?: {{$baseName}}Request) {
+    const mama = use{{$serviceName}}Mothership();
+	return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo(mama, args));
+}
+
+export function useFull{{$baseName}}(args ?: {{$baseName}}Request) {
+    const mama = use{{$serviceName}}Mothership();
+    const stubTqrv = use{{$baseName}}(args);
+    let dataUpdatedAt = stubTqrv.dataUpdatedAt;
+	const ribRequest = stubTqrv.data ? { {{$ribFetchFieldName}}Id: stubTqrv.data.id } as const : undefined;
+
+	const ribTqrv = useRefreshable{{if $infallible}}Infallible{{end}}Query({
+		queryKey: {{$ribFetchFieldName}}ByIdTqk(ribRequest),
+		queryFn: ribRequest
+            ? () => {{ template "tqfn" dict "Method" $byIdWatcherMethod "MethodMap" $methodMap "argsVarName" "ribRequest" }}
+            : skipToken,
+    });
+	if (isAfter(ribTqrv.dataUpdatedAt, dataUpdatedAt)) {
+		dataUpdatedAt = ribTqrv.dataUpdatedAt;
+    }
+
+	return {...ribTqrv, dataUpdatedAt};
+}
+{{-             else }}
+// {{$baseName}} takes no arguments
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}) {
+    return queryOptions({
+        queryKey: {{$tsbn}}Tqk,
+        queryFn: () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }},
+        {{if $infallible}}throwOnError: true,{{end}},
+        select: (data: {{$method.Name}}Response) => data.{{$out.Name}},
+	});
+}
+
+export function use{{$baseName}}() {
+    const mama = use{{$serviceName}}Mothership();
+	return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo());
+}
+
+export function useFull{{$baseName}}() {
+	const mama = use{{$serviceName}}Mothership();
+    const {data: stub} = use{{$baseName}}();
+
+    const ribRequest = stub ? { {{$ribFetchFieldName}}Id: stub.id } as const : undefined;
+    return useRefreshable{{if $infallible}}Infallible{{end}}Query({
+        queryKey: {{$ribFetchFieldName}}ByIdTqk(ribRequest),
+        queryFn: ribRequest
+		    ? () => {{ template "tqfn" dict "Method" $byIdWatcherMethod "MethodMap" $methodMap "argsVarName" "ribRequest" }}
+			: skipToken,
+    });
+}
+{{-             end }}
+{{-         end }}
+{{-    end }}
+{{- else}}{{/* not a stub */}}
+// {{$outTypeBaseName}} is not a stub
+{{-    if $hasInput }}
+// {{$baseName}} can take args
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}, args ?: {{$baseName}}Request) {
+    return queryOptions({
+        queryKey: {{$tsbn}}Tqk(args),
+        queryFn: args
+            ? () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }}
+            : skipToken,
+        {{if $infallible}}throwOnError: true,{{end}}
+        {{if $hasOutput}}select: (data: {{$method.Name}}Response) => data.{{$out.Name}},{{end}}
+    });
+}
+
+export function use{{$baseName}}(args ?: {{$baseName}}Request) {
+	const mama = use{{$serviceName}}Mothership();
+	return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo(mama, args));
+}
+{{-    else }}{{/* no input */}}
+// {{$baseName}} takes no args
+export function {{$tsmn}}Tqo(mama: {{$serviceName}}) {
+	return queryOptions({
+        queryKey: {{$tsbn}}Tqk,
+        queryFn: () => {{template "tqfn" dict "Method" $method "MethodMap" $methodMap }},
+        {{if $infallible}}throwOnError: true,{{end}}
+        {{if $hasOutput}}select: (data: {{$method.Name}}Response) => data.{{$out.Name}},{{end}}
+    });
+}
+
+export function use{{$baseName}}() {
+    const mama = use{{$serviceName}}Mothership();
+    return useRefreshable{{if $infallible}}Infallible{{end}}Query({{$tsmn}}Tqo(mama));
+}
+{{-    end }}
+{{- end }}
+// TQOOUT
+{{- end }}
