@@ -63,7 +63,7 @@ export class {{$service.Name}} implements {{$service.Name}}Client {
       {{- $methodRespName = printf "%sResponse" $method.Name -}}
     {{- end -}}
   {{- end}}
-  {{firstLetterToLower .Name}} = ({{template "methodInputs" dict "Method" . "Opts" $opts "TypeMap" $typeMap}}): {{if $method.StreamOutput}}WebrpcStreamController{{else}}{{if MethodHasFileDownload $method}}Promise<WebrpcFile>{{else if $method.Succinct}}Promise<{{(index $method.Outputs 0).Type}}>{{else}}Promise<{{$method.Name}}{{if $opts.compat}}Return{{else}}Response{{end}}>{{end}}{{end}} => {
+  {{firstLetterToLower .Name}} = {{if MethodHasRoute $method}}async {{end}}({{template "methodInputs" dict "Method" . "Opts" $opts "TypeMap" $typeMap}}): {{if $method.StreamOutput}}WebrpcStreamController{{else}}{{if MethodHasFileDownload $method}}Promise<WebrpcFile>{{else if $method.Succinct}}Promise<{{(index $method.Outputs 0).Type}}>{{else}}Promise<{{$method.Name}}{{if $opts.compat}}Return{{else}}Response{{end}}>{{end}}{{end}} => {
   {{- if $method.StreamOutput }}
     const abortController = new AbortController()
     const abortSignal = abortController.signal
@@ -101,7 +101,7 @@ export class {{$service.Name}} implements {{$service.Name}}Client {
       {{- if MethodHasFileDownload $method }}
       return buildFileResponse(res)
       {{- else }}
-      return buildResponse(res).then(_data => {
+      return buildResponse(res, {{if MethodHasEmptyResponse $method}}true{{else}}false{{end}}).then(_data => {
         return JsonDecode<{{$methodRespName}}>(_data, '{{$methodRespName}}')
       })
       {{- end }}
@@ -122,13 +122,18 @@ export class {{$service.Name}} implements {{$service.Name}}Client {
     })
   {{- else }}
     return this.fetch(
+      {{- if MethodHasRoute $method }}
+      {{- $route := MethodCanonicalRoute $method }}
+      ...createHttpRestRequest(this.hostname, '{{$route.Verb}}', '{{RoutePath $route}}', {{if RouteHasBody $route}}true{{else}}false{{end}}, {{if .Inputs | len}}req{{else}}{}{{end}}, headers, signal)).then((res) => {
+      {{- else }}
       this.url('{{.Name}}'),
       {{- if .Inputs | len }}
       createHttpRequest(JsonEncode(req), headers, signal)).then((res) => {
       {{- else }}
       createHttpRequest('{}', headers, signal)).then((res) => {
       {{- end }}
-      return buildResponse(res).then(_data => {
+      {{- end }}
+      return buildResponse(res, {{if MethodHasEmptyResponse $method}}true{{else}}false{{end}}).then(_data => {
         return JsonDecode<{{$methodRespName}}>(_data, '{{$methodRespName}}')
       })
     }, (error) => {

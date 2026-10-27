@@ -178,7 +178,7 @@ func (c *chatClient) SendMessage(ctx context.Context, username string, text stri
 func (c *chatClient) SubscribeMessages(ctx context.Context, username string, lastMessageId *uint64) (SubscribeMessagesStreamReader, error) {
 	in := struct {
 		Arg0 string  `json:"username"`
-		Arg1 *uint64 `json:"lastMessageId"`
+		Arg1 *uint64 `json:"lastMessageId,omitzero"`
 	}{username, lastMessageId}
 
 	resp, err := doHTTPRequestRaw(ctx, c.client, c.urls[1], in, nil)
@@ -417,7 +417,7 @@ func (s *chatService) serveSubscribeMessagesJSONStream(ctx context.Context, w ht
 
 	reqPayload := struct {
 		Arg0 string  `json:"username"`
-		Arg1 *uint64 `json:"lastMessageId"`
+		Arg1 *uint64 `json:"lastMessageId,omitzero"`
 	}{}
 
 	if err := json.Unmarshal(reqBody, &reqPayload); err != nil {
@@ -654,7 +654,7 @@ func doHTTPRequestRaw(ctx context.Context, client HTTPClient, url string, in, ou
 		return nil, ErrWebrpcRequestFailed.WithCause(err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 { // 2xx is success; routes may declare e.g. 201
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, ErrWebrpcBadResponse.WithCausef("failed to read server error response body: %w", err)
