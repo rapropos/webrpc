@@ -12,6 +12,9 @@
 
 {{- if eq $opts.json "stdlib" -}}
 	{{- set $stdlibImports "encoding/json" "" -}}
+{{- else if eq $opts.json "encoding/json/v2" -}}
+	{{- set $stdlibImports "encoding/json" "jsonv1" -}}
+	{{- set $stdlibImports "encoding/json/v2" "json" -}}
 {{- end -}}
 
 {{- if $opts.errorStackTrace }}
@@ -106,6 +109,7 @@ import (
 {{- /* Print custom type imports. */ -}}
 {{- $imports := dict -}}
 
+{{- if or (eq $opts.json "stdlib") (eq $opts.json "encoding/json/v2") -}}
 {{- if $opts.tq }}
 	{{- set $imports "github.com/jackc/pgx/v5" "" }}
 	{{- set $imports "github.com/jackc/pgx/v5/pgtype" "" }}

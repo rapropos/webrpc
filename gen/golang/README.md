@@ -29,6 +29,7 @@ Change any of the following values by passing `-option="Value"` CLI flag to `web
 | `-server`             | `false`   | generate server code                                                        | v0.5.0   |
 | `-types=false`        | `true`    | don't generate types                                                        | v0.13.0  |
 | `-json=sonic`         |           | use [sonic](https://github.com/bytedance/sonic) for JSON encoding           | v0.18.0  |
+| `-json=v2`            |           | use [`encoding/json/v2`](https://pkg.go.dev/encoding/json/v2) (Go 1.27+, or `GOEXPERIMENT=jsonv2`) | v0.50.0  |
 | `-json=jsoniter`      |           | deprecated, unsupported: jsoniter is archived upstream; does not support omitzero | v0.12.0  |
 | `-json=<pkg>`         |           | use alternative drop-in replacement import path for JSON encoding package   | v0.18.0  |
 | `-fixEmptyArrays`     | `false`   | `encoding/json`: fix `null` arrays with reflect (see Go [#27589][go27589])  | v0.13.0  |
@@ -83,6 +84,27 @@ type User struct {
 	PasswordHash string    `json:"-" db:"passwd_hash"`
 }
 ```
+
+## Optional JSON fields
+
+With `encoding/json` or a compatible encoder, optional (`?`) pointer fields
+use `omitempty`: nil is omitted, while a non-nil pointer remains present even
+when its value implements `IsZero()` and returns true. This preserves explicit
+zero amounts and zero timestamps.
+
+Optional slices and maps keep `omitzero`, so nil is omitted but non-nil empty
+collections remain `[]` and `{}`. Non-pointer Go type overrides also keep
+`omitzero`; use a pointer override when zero and unset must be distinct.
+
+An explicit `go.tag.json` still owns the complete tag, including omission
+behavior. Pointer overrides such as `*time.Time` are recognized by their leading
+`*`; named Go types that hide a pointer require an explicit JSON tag.
+
+These rules rely on v1 `omitempty` semantics. Direct `encoding/json/v2` encoding
+uses different emptiness rules and needs legacy omission semantics to preserve
+non-nil pointers to empty strings, objects, and collections.
+
+`-json=v2` keeps these semantics through `DefaultOptionsV1()`.
 
 ## REST routes
 
