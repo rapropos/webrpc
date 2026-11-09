@@ -110,12 +110,6 @@ import (
 {{- $imports := dict -}}
 
 {{- if or (eq $opts.json "stdlib") (eq $opts.json "encoding/json/v2") -}}
-{{- if $opts.tq }}
-	{{- set $imports "github.com/jackc/pgx/v5" "" }}
-	{{- set $imports "github.com/jackc/pgx/v5/pgtype" "" }}
-{{- end -}}
-
-{{- if eq $opts.json "stdlib" -}}
 	{{- /* Already imported in the stdlib section. */ -}}
 {{- else if eq $opts.json "jsoniter" -}}
 	{{- set $imports "github.com/json-iterator/go" "" -}}
@@ -123,6 +117,11 @@ import (
 	{{- set $imports "github.com/bytedance/sonic" "" -}}
 {{- else -}}
 	{{- set $imports $opts.json "json" -}}
+{{- end -}}
+
+{{- if $opts.tq }}
+    {{- set $imports "github.com/jackc/pgx/v5" "" }}
+	{{- set $imports "github.com/jackc/pgx/v5/pgtype" "" }}
 {{- end -}}
 
 {{- if ne $opts.importTypesFrom "" }}
